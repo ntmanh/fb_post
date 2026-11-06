@@ -1,0 +1,21 @@
+{
+  "name": "fb-crm",
+  "version": "1.0.0",
+  "description": "CRM quản lý đăng bài / bình luận / lập lịch Facebook (trang cá nhân & nhóm)",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "setup": "npm install && npx playwright install chromium",
+    "test": "node --test --experimental-test-module-mocks --test-concurrency=1 test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^2.0.2",
+    "playwright": "^1.49.1"
+  }
+}

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FB CRM Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+    <nav class="rail">
+      <div class="brand"><div class="logo">F</div><span>FB CRM</span></div>
+      <button class="nav active" data-view="studio"><i>✦</i><span>Studio</span></button>
+      <button class="nav" data-view="calendar"><i>▦</i><span>Lịch chạy</span></button>
+      <button class="nav" data-view="accounts"><i>◉</i><span>Tài khoản</span></button>
+      <button class="nav" data-view="groups"><i>⚇</i><span>Nhóm</span></button>
+      <button class="nav" data-view="templates"><i>❏</i><span>Mẫu nội dung</span></button>
+      <button class="nav" data-view="imageTemplates"><i>▣</i><span>Mẫu ảnh</span></button>
+      <button class="nav" data-view="logs"><i>≣</i><span>Nhật ký</span></button>
+      <button class="nav" data-view="settings"><i>⚙</i><span>Cài đặt</span></button>
+    </nav>
+
+    <main class="main">
+      <header class="topbar">
+        <h1 id="viewTitle">Studio</h1>
+        <div class="top-actions">
+          <span class="pill" id="accPill"><b class="dot"></b><span>Tài khoản: –</span></span>
+          <span class="pill muted" id="queuePill">Hàng chờ: –</span>
+          <button class="btn" id="btnResume">Chạy tiếp</button>
+          <button class="btn danger-text" id="btnStopAll">Dừng tất cả</button>
+        </div>
+      </header>
+      <section id="view" class="view"></section>
+    </main>
+  </div>
+
+  <dialog id="modal"><form method="dialog" class="modal-body" id="modalBody"></form></dialog>
+  <div id="toasts"></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
