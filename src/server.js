@@ -113,12 +113,15 @@ app.post('/api/accounts/:id/check', wrap(async (req, res) => {
   res.json({ ok: true, uid });
 }));
 
-// ---------- Nhóm ----------
+// ---------- Nhóm & Trang ----------
+
+const TARGET_TYPES = ['group', 'page'];
 
 app.get('/api/targets', wrap((req, res) => res.json(db.prepare('SELECT * FROM targets ORDER BY name').all())));
 
 app.post('/api/targets', wrap((req, res) => {
-  // nhận 1 nhóm {name,url} hoặc nhiều dòng "url | tên"
+  // nhận 1 đích {type,name,url} hoặc nhiều dòng "url | tên"; type: group (mặc định) | page
+  const type = TARGET_TYPES.includes(req.body.type) ? req.body.type : 'group';
   const items = req.body.bulk
     ? String(req.body.bulk).split('\n').map(l => l.trim()).filter(Boolean).map(l => {
         const [url, name] = l.split('|').map(x => x.trim());
@@ -128,16 +131,18 @@ app.post('/api/targets', wrap((req, res) => {
   const ins = db.prepare('INSERT OR IGNORE INTO targets(name, type, url, note, created_at) VALUES (?, ?, ?, ?, ?)');
   let added = 0;
   for (const it of items) {
-    const url = normalizeFbUrl(it.url);
+    const url = normalizeFbUrl(it.url, type);
     if (!url) continue;
-    added += Number(ins.run(it.name || url.replace(/.*\/groups\//, 'Nhóm ').replace(/\/$/, ''), 'group', url, it.note || '', now()).changes);
+    added += Number(ins.run(it.name || defaultTargetName(url, type), type, url, it.note || '', now()).changes);
   }
   res.json({ added });
 }));
 
 app.put('/api/targets/:id', wrap((req, res) => {
+  const row = db.prepare('SELECT type FROM targets WHERE id = ?').get(req.params.id);
+  if (!row) throw new Error('Không tìm thấy');
   db.prepare('UPDATE targets SET name = COALESCE(?, name), url = COALESCE(?, url), note = COALESCE(?, note) WHERE id = ?')
-    .run(req.body.name ?? null, req.body.url ? normalizeFbUrl(req.body.url) : null, req.body.note ?? null, req.params.id);
+    .run(req.body.name ?? null, req.body.url ? normalizeFbUrl(req.body.url, row.type) : null, req.body.note ?? null, req.params.id);
   res.json({ ok: true });
 }));
 
@@ -146,10 +151,17 @@ app.delete('/api/targets/:id', wrap((req, res) => {
   res.json({ ok: true });
 }));
 
-function normalizeFbUrl(u) {
+function defaultTargetName(url, type) {
+  if (type === 'group') return url.replace(/.*\/groups\//, 'Nhóm ').replace(/\/$/, '');
+  const u = new URL(url);
+  return `Trang ${u.searchParams.get('id') || u.pathname.replace(/^\/|\/$/g, '')}`;
+}
+
+// ID số → link nhóm (groups/<id>) hoặc link Trang (profile.php?id=<id>)
+function normalizeFbUrl(u, type = 'group') {
   u = String(u || '').trim();
   if (!u) return null;
-  if (/^\d+$/.test(u)) u = `https://www.facebook.com/groups/${u}`;
+  if (/^\d+$/.test(u)) u = type === 'page' ? `https://www.facebook.com/profile.php?id=${u}` : `https://www.facebook.com/groups/${u}`;
   if (!/^https?:\/\//.test(u)) u = `https://${u}`;
   try {
     const url = new URL(u);
@@ -277,7 +289,7 @@ app.put('/api/tasks/:id', wrap((req, res) => {
    imageTemplates: number[],      // id mẫu ảnh: mỗi lần chạy bốc ngẫu nhiên số ảnh mặc định của từng mẫu
    accountIds: number[],
    distribute: 'rotate' | 'all',  // mỗi đích 1 tài khoản (luân phiên) hay tất cả tài khoản
-   targets: [{type:'profile'} | {type:'group', url, name} | {type:'post', url}],
+   targets: [{type:'profile'} | {type:'group', url, name} | {type:'page', url, name} | {type:'post', url}],
    startAt: number | null,        // ms, null = ngay bây giờ
    intervalMin: number,           // giãn cách giữa các task
    repeat: 'none' | 'daily' | 'weekly',
@@ -296,8 +308,9 @@ app.post('/api/tasks/bulk', wrap((req, res) => {
   const accountIds = (b.accountIds || []).map(Number).filter(Boolean);
   const targets = (b.targets || []).map(t => {
     if (t.type === 'profile') return { type: 'profile', url: null, name: 'Trang cá nhân' };
-    const url = normalizeFbUrl(t.url);
-    return url ? { type: t.type === 'post' ? 'post' : 'group', url, name: t.name || url } : null;
+    const type = ['post', 'page'].includes(t.type) ? t.type : 'group';
+    const url = normalizeFbUrl(t.url, type);
+    return url ? { type, url, name: t.name || url } : null;
   }).filter(Boolean);
 
   if (!contents.length) throw new Error('Chưa nhập nội dung');
@@ -395,7 +408,9 @@ function resolveImageTemplates(list, per) {
   });
 }
 
-// Thao tác hàng loạt: run | run_now | pause | retry | delete
+// Thao tác hàng loạt: run | run_now | pause | retry | rerun | delete
+// rerun: chạy lại task đã xong (đăng thêm một lần, dùng để thử). Lần lặp kế tiếp của task lặp đã được tạo
+// khi task xong, nên bản chạy lại đặt repeat = 'none' để không sinh thêm lần lặp trùng.
 app.post('/api/tasks/action', wrap((req, res) => {
   const ids = (req.body.ids || []).map(Number).filter(Boolean);
   if (!ids.length) throw new Error('Chưa chọn task');
@@ -406,10 +421,20 @@ app.post('/api/tasks/action', wrap((req, res) => {
     run_now: `UPDATE tasks SET status = 'pending', scheduled_at = ${t}, attempts = 0 WHERE id IN (${ph}) AND status IN ('draft','paused','error','pending')`,
     pause: `UPDATE tasks SET status = 'paused' WHERE id IN (${ph}) AND status IN ('pending','draft')`,
     retry: `UPDATE tasks SET status = 'pending', scheduled_at = ${t}, attempts = 0 WHERE id IN (${ph}) AND status = 'error'`,
+    rerun: `UPDATE tasks SET status = 'pending', scheduled_at = ${t}, attempts = 0, repeat = 'none', result = NULL, error = NULL, shot = NULL, finished_at = NULL
+      WHERE id IN (${ph}) AND status = 'done' RETURNING id`,
     delete: `DELETE FROM tasks WHERE id IN (${ph}) AND status != 'running'`,
   }[req.body.action];
   if (!sql) throw new Error('Thao tác không hợp lệ');
+  const action = req.body.action;
+  if (action === 'rerun') {
+    const done = db.prepare(sql).all(...ids).map(r => r.id);
+    for (const id of done) log('Chạy lại thủ công (đăng thêm một lần)', { taskId: id });
+    if (done.length) runner.runNow(done).catch(e => console.error('[runner]', e));
+    return res.json({ changed: done.length });
+  }
   const r = db.prepare(sql).run(...ids);
+  if (action === 'run_now') runner.runNow(ids).catch(e => console.error('[runner]', e));
   res.json({ changed: Number(r.changes) });
 }));
 

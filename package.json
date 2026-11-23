@@ -8,7 +8,12 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "setup": "npm install && npx playwright install chromium",
+    "build": "node scripts/build.mjs",
     "test": "node --test --experimental-test-module-mocks --test-concurrency=1 test/*.test.mjs"
+  },
+  "update": {
+    "repo": "ntmanh/fb_post",
+    "branch": "main"
   },
   "engines": {
     "node": ">=22.13"

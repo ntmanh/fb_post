@@ -129,6 +129,49 @@ describe('Giao diện Studio: Tạo & lên lịch', () => {
     await page.waitForFunction(() => document.querySelectorAll('#taskList .task').length === 4);
   });
 
+  test('đăng lên Trang (Fanpage): Trang đã lưu + dán link, không lẫn với nhóm', async () => {
+    db.prepare("INSERT INTO targets(name, type, url, created_at) VALUES ('Trang Shop', 'page', 'https://www.facebook.com/shoptest', ?)").run(Date.now());
+    await page.reload();
+    await page.waitForSelector('#formArea textarea[data-field="text"]');
+    await page.locator('label.switch:has(input[data-sw="toProfile"])').click();
+    await page.locator('label.switch:has(input[data-sw="toPages"])').click();
+    // chỉ Trang hiện trong danh sách Trang, nhóm không lẫn vào
+    assert.equal(await page.locator('[data-pg]').count(), 1);
+    assert.equal(await page.locator('[data-grp]').count(), 0);
+    await page.click('#pgAll');
+    await page.fill('textarea[data-field="pageUrls"]', 'facebook.com/trangkhac');
+    await page.fill('textarea[data-field="text"]', 'Khuyến mãi');
+    await page.click('[data-acc="1"]');
+    assert.match(await page.textContent('#estimate'), /Sẽ tạo 2 task/);
+    await page.click('#btnCreate');
+    assert.ok(await toast('Đã tạo 2 task'));
+
+    const rows = tasks();
+    assert.deepEqual(rows.map(r => [r.target_type, r.target_url, r.target_name]), [
+      ['page', 'https://www.facebook.com/shoptest', 'Trang Shop'],
+      ['page', 'https://www.facebook.com/trangkhac', 'https://www.facebook.com/trangkhac'],
+    ]);
+  });
+
+  test('trang quản lý Trang: thêm Trang bằng ID, bấm "Đăng lên Trang" mở Studio đã chọn sẵn', async () => {
+    await page.click('.nav[data-view="pages"]');
+    await page.click('#addGrp');
+    await page.fill('#modalBody input[name="url"]', '123456');
+    await page.fill('#modalBody input[name="name"]', 'Fanpage A');
+    await page.click('#modalBody button[value="ok"]');
+    assert.ok(await toast('Đã thêm Trang'));
+    const row = db.prepare("SELECT * FROM targets WHERE type = 'page'").get();
+    assert.equal(row.url, 'https://www.facebook.com/profile.php?id=123456');
+    assert.equal(row.name, 'Fanpage A');
+    await page.waitForSelector('#view tbody tr[data-id] >> text=Fanpage A');
+    assert.equal(await page.locator('#view tbody tr[data-id]').count(), 1, 'nhóm không hiện trong trang Trang');
+
+    await page.click('#view [data-act="post"]');
+    await page.waitForSelector(`[data-pg="${row.id}"].on`);
+    assert.equal(await page.isChecked('input[data-sw="toProfile"]'), false);
+    assert.equal(await page.isChecked('input[data-sw="toGroups"]'), false);
+  });
+
   test('chạy ngay + luân phiên 2 tài khoản cho bình luận (xoay vòng nội dung)', async () => {
     await page.click('.tab[data-kind="comment"]');
     await page.fill('textarea[data-field="postUrls"]', 'https://facebook.com/groups/1/posts/10\nhttps://www.facebook.com/x/posts/20\nwww.facebook.com/groups/1/posts/30');
@@ -360,9 +403,12 @@ describe('Bộ chạy lịch', () => {
     setSettings({ min_gap_seconds: '0' });
     addTask({ kind: 'comment', target_type: 'post', target_url: 'https://www.facebook.com/p/1' });
     await runTick();
+    addTask({ target_type: 'page', target_url: 'https://www.facebook.com/shoptest' });
+    await runTick();
     assert.deepEqual(calls.map(c => [c.fn, c.targetType ?? null, c.url]), [
       ['createPost', 'group', 'https://www.facebook.com/groups/1/'],
       ['comment', null, 'https://www.facebook.com/p/1'],
+      ['createPost', 'page', 'https://www.facebook.com/shoptest'],
     ]);
   });
 
@@ -551,6 +597,49 @@ describe('Bộ chạy lịch', () => {
     assert.equal(task(id).status, 'pending');
     assert.equal(calls.length, 0);
   });
+
+  test('"Chạy ngay" chạy cả khi bộ chạy đang dừng và bỏ qua khoảng nghỉ; task khác vẫn chờ', async () => {
+    setSettings({ runner_enabled: '0', min_gap_seconds: '600' });
+    db.prepare('UPDATE accounts SET last_action_at = ? WHERE id = 1').run(Date.now());
+    const a = addTask({ status: 'draft', scheduled_at: Date.now() + DAY }), b = addTask();
+    const action = body => fetch(`${BASE}/api/tasks/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json());
+    assert.equal((await action({ ids: [a], action: 'run_now' })).changed, 1);
+    await settle();
+    assert.equal(task(a).status, 'done');
+    assert.equal(calls.length, 1);
+
+    await runTick();
+    assert.equal(task(b).status, 'pending', 'task thường vẫn chờ khi bộ chạy dừng');
+    assert.equal(calls.length, 1);
+  });
+
+  test('"Chạy lại" task đã xong → đăng thêm một lần, không sinh thêm lần lặp trùng', async () => {
+    setSettings({ runner_enabled: '0' });
+    const a = addTask({ status: 'done', repeat: 'daily' }), b = addTask({ status: 'error' });
+    db.prepare('UPDATE tasks SET result = ?, finished_at = ? WHERE id = ?').run('Đã đăng', Date.now() - DAY, a);
+    const before = tasks().length;
+    const action = body => fetch(`${BASE}/api/tasks/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json());
+    assert.equal((await action({ ids: [a, b], action: 'rerun' })).changed, 1, 'chỉ chạy lại task đã xong');
+    await settle();
+    assert.equal(task(a).status, 'done');
+    assert.ok(task(a).finished_at > Date.now() - MIN);
+    assert.equal(task(b).status, 'error');
+    assert.equal(calls.length, 1);
+    assert.equal(tasks().length, before, 'không tạo thêm lần lặp');
+    const logs = db.prepare('SELECT message FROM logs WHERE task_id = ?').all(a).map(l => l.message);
+    assert.ok(logs.includes('Chạy lại thủ công (đăng thêm một lần)'));
+  });
+
+  test('"Chạy ngay" vẫn tôn trọng giới hạn thao tác mỗi ngày', async () => {
+    setSettings({ runner_enabled: '0', daily_limit: '1' });
+    addTask({ status: 'done' });
+    db.prepare("UPDATE tasks SET finished_at = ? WHERE status = 'done'").run(Date.now());
+    const id = addTask();
+    await runner.runNow([id]);
+    await settle();
+    assert.equal(task(id).status, 'pending');
+    assert.equal(calls.length, 0);
+  });
 });
 
 // =====================================================================
@@ -632,6 +721,25 @@ describe('API tạo task hàng loạt', () => {
     assert.equal(r.status, 400);
     r = await bulk({ kind: 'comment', contents: ['x'], accountIds: [1], targets: [{ type: 'profile' }] });
     assert.equal(r.status, 400);
+    r = await bulk({ kind: 'comment', contents: ['x'], accountIds: [1], targets: [{ type: 'page', url: 'https://www.facebook.com/shop' }] });
+    assert.equal(r.status, 400, 'bình luận không nhận đích Trang');
     assert.equal(tasks().length, 0);
+  });
+
+  test('API: Trang nhận ID số, nhập nhiều dòng và tên mặc định', async () => {
+    const post = body => fetch(`${BASE}/api/targets`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json());
+    assert.equal((await post({ type: 'page', bulk: '987\nfacebook.com/shopabc | Shop ABC\nhttps://evil.com/x' })).added, 2);
+    assert.equal((await post({ url: '555' })).added, 1, 'không truyền type thì mặc định là nhóm');
+    const rows = db.prepare('SELECT type, url, name FROM targets ORDER BY id').all();
+    assert.deepEqual(rows.map(r => ({ ...r })), [
+      { type: 'page', url: 'https://www.facebook.com/profile.php?id=987', name: 'Trang 987' },
+      { type: 'page', url: 'https://www.facebook.com/shopabc', name: 'Shop ABC' },
+      { type: 'group', url: 'https://www.facebook.com/groups/555', name: 'Nhóm 555' },
+    ]);
+
+    const r = await bulk({ kind: 'post', contents: ['x'], accountIds: [1], targets: [{ type: 'page', url: '987' }] });
+    assert.equal(r.status, 200);
+    assert.equal(tasks()[0].target_type, 'page');
+    assert.equal(tasks()[0].target_url, 'https://www.facebook.com/profile.php?id=987');
   });
 });

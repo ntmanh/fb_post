@@ -1,10 +1,11 @@
 # FB CRM Studio
 
-Web CRM để đăng bài, bình luận và lập lịch trên Facebook, áp dụng cho **trang cá nhân** và **nhóm**, quản lý được nhiều tài khoản.
+Web CRM để đăng bài, bình luận và lập lịch trên Facebook, áp dụng cho **trang cá nhân**, **nhóm** và **Trang (Fanpage)**, quản lý được nhiều tài khoản.
 
 ## Tính năng
 
-- **Đăng bài** lên trang cá nhân và/hoặc nhiều nhóm cùng lúc, kèm tối đa 10 ảnh/video.
+- **Đăng bài** lên trang cá nhân, nhiều nhóm và/hoặc nhiều Trang (Fanpage) cùng lúc, kèm tối đa 10 ảnh/video.
+- **Đăng lên Trang (Fanpage)** với tư cách Trang: lưu danh sách Trang ở mục *Trang* (nhận link hoặc ID số). Tài khoản chạy task phải là quản trị viên hoặc có quyền tạo bài viết của Trang. Trước khi đăng, hệ thống tự bấm *Chuyển sang Trang*; đăng xong thì chuyển lại trang cá nhân để các task sau không bị đăng nhầm dưới tên Trang.
 - **Bình luận** vào bài viết (trang cá nhân hoặc nhóm) theo danh sách link, có thể kèm 1 ảnh.
 - **Lập lịch**: chạy ngay hoặc hẹn giờ, đặt giãn cách giữa các task, lặp lại hằng ngày/hằng tuần.
 - **Tự động chọn và đảo ảnh** từ một kho ảnh (tối đa 50 ảnh):
@@ -33,10 +34,18 @@ npm start         # mở http://localhost:3000
 
 Đổi cổng bằng biến `PORT`. Server chỉ lắng nghe trên `127.0.0.1`.
 
+### Đóng gói cho máy khác và cập nhật
+
+- `npm run build` tạo `dist/FB-CRM-<version>-win64.zip`, gồm sẵn Node.js và Chromium. Máy đích không cần cài gì thêm; hướng dẫn nằm trong `HUONG-DAN-CAI-DAT.txt` của gói.
+- **Cập nhật máy đã cài gói:** tắt chương trình rồi bấm đúp `Update.bat`. Script ([scripts/update.mjs](scripts/update.mjs)) tải commit mới nhất của nhánh `main` trên GitHub (repo khai báo ở mục `update` trong `package.json`), thay mã nguồn trong `app/` và giữ nguyên `data/`. Nếu `package-lock.json` thay đổi, script cài lại thư viện. Bản cũ được lưu ở `app-backup/`.
+- **Máy chạy từ mã nguồn (git clone):** `git pull && npm install`, rồi `npm start`.
+
+Quy trình phát hành: commit và push lên `main`, các máy chỉ cần chạy `Update.bat`. Chỉ khi đổi phiên bản Node.js mới phải build và gửi lại gói zip.
+
 ## Sử dụng
 
 1. **Tài khoản**: bấm *Thêm tài khoản*, rồi *Đăng nhập*. Một cửa sổ Chromium hiện ra, bạn tự đăng nhập Facebook (kể cả 2FA). Cửa sổ tự đóng khi đăng nhập xong. Cách khác là *Nhập cookie* (JSON từ extension Cookie-Editor).
-2. **Nhóm**: thêm link các nhóm mà tài khoản đã tham gia.
+2. **Nhóm**: thêm link các nhóm mà tài khoản đã tham gia. **Trang**: thêm link các Trang mà tài khoản đang quản trị.
 3. **Studio**: chọn *Đăng bài* hoặc *Bình luận*, nhập nội dung, chọn tài khoản và thời gian, rồi bấm *Tạo & lên lịch*. Nút *Chỉ thêm vào hàng đợi* tạo task ở trạng thái "Chưa chạy" để bạn bấm *Chạy* sau.
 4. Bộ chạy quét hàng đợi mỗi 5 giây. *Dừng tất cả* / *Chạy tiếp* trên thanh trên cùng để bật/tắt.
 

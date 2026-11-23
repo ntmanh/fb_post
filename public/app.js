@@ -29,6 +29,9 @@ function toast(msg, type = 'ok') {
 
 const guard = fn => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message, 'error'); } };
 
+const RUNNER_OFF = 'Bộ chạy đang dừng nên task sẽ chưa chạy. Bấm "Chạy tiếp" trên thanh trên cùng để bật lại.';
+const runnerOff = () => S.status?.runner && !S.status.runner.enabled;
+
 function modal(title, body, okText = 'Lưu') {
   const dlg = $('#modal');
   $('#modalBody').innerHTML = `<h2>${title}</h2>${body}
@@ -44,6 +47,7 @@ const ST = { draft: 'Chưa chạy', pending: 'Chờ chạy', running: 'Đang ch�
 const ACC_ST = { new: 'Chưa đăng nhập', logging_in: 'Đang đăng nhập…', ok: 'Hoạt động', expired: 'Hết phiên', checkpoint: 'Checkpoint' };
 const ACC_CLS = { ok: 'done', logging_in: 'running', new: 'draft', expired: 'error', checkpoint: 'error' };
 const REPEAT = { none: '', daily: '↻ hằng ngày', weekly: '↻ hằng tuần' };
+const RERUN_ASK = n => `Chạy lại ${n > 1 ? n + ' task đã xong' : 'task đã xong này'} ngay bây giờ? Bài/bình luận sẽ được đăng thêm một lần nữa (dùng để thử lại khi bài chưa lên Facebook).`;
 const statusChip = s => `<span class="status st-${s}"><b class="dot"></b>${ST[s] || s}</span>`;
 
 // ================= State =================
@@ -57,6 +61,7 @@ const S = {
     kind: 'post', text: '', postUrls: '', groupUrls: '',
     contentSource: 'text', contentTplIds: new Set(), // 'templates' = ngẫu nhiên từ mẫu nội dung chưa dùng
     toProfile: true, toGroups: false, groupIds: new Set(),
+    toPages: false, pageIds: new Set(), pageUrls: '',
     images: [], imageMode: 'all', imageMin: 1, imageMax: 3, imageShuffle: false,
     imgTpls: new Set(), // id mẫu ảnh đã chọn (theo thứ tự chọn)
     accountIds: new Set(),
@@ -92,16 +97,39 @@ const seg = (name, opts, val) =>
 const sw = (name, label, on, extra = '') =>
   `<label class="switch"><input type="checkbox" data-sw="${name}" ${on ? 'checked' : ''}><span class="knob"></span><span>${label} <small class="muted">${extra}</small></span></label>`;
 
+// Đích đã lưu: nhóm và Trang (Fanpage) dùng chung bảng targets, phân biệt bằng type
+const TARGET_KIND = {
+  group: { sw: 'toGroups', ids: 'groupIds', urls: 'groupUrls', attr: 'grp', all: 'grpAll', label: 'Nhóm', unit: 'nhóm', view: 'groups',
+    placeholder: 'Link nhóm khác, mỗi dòng 1 link' },
+  page: { sw: 'toPages', ids: 'pageIds', urls: 'pageUrls', attr: 'pg', all: 'pgAll', label: 'Trang (Fanpage)', unit: 'Trang', view: 'pages',
+    placeholder: 'Link Trang khác, mỗi dòng 1 link' },
+};
+const targetsOf = type => S.targets.filter(t => (t.type || 'group') === type);
+
 function buildTargets() {
   const f = S.form;
   if (f.kind === 'comment') return lines(f.postUrls).map(url => ({ type: 'post', url }));
   const t = [];
   if (f.toProfile) t.push({ type: 'profile' });
-  if (f.toGroups) {
-    for (const g of S.targets) if (f.groupIds.has(g.id)) t.push({ type: 'group', url: g.url, name: g.name });
-    for (const url of lines(f.groupUrls)) t.push({ type: 'group', url });
+  for (const [type, k] of Object.entries(TARGET_KIND)) {
+    if (!f[k.sw]) continue;
+    for (const g of targetsOf(type)) if (f[k.ids].has(g.id)) t.push({ type, url: g.url, name: g.name });
+    for (const url of lines(f[k.urls])) t.push({ type, url });
   }
   return t;
+}
+
+function targetPicker(type) {
+  const f = S.form, k = TARGET_KIND[type], saved = targetsOf(type);
+  const sel = f[k.ids];
+  return `
+    ${sw(k.sw, k.label, f[k.sw], `(${sel.size + lines(f[k.urls]).length} ${k.unit}${type === 'page' ? ' · cần quyền quản trị' : ''})`)}
+    ${f[k.sw] ? `
+      <div class="row" style="margin:6px 0"><span class="muted grow">${k.label} đã lưu</span>
+        <button type="button" class="btn sm" id="${k.all}">${sel.size === saved.length && saved.length ? 'Bỏ chọn' : 'Chọn tất cả'}</button></div>
+      <div class="chips">${saved.map(g => `<button type="button" class="chip ${sel.has(g.id) ? 'on' : ''}" data-${k.attr}="${g.id}" title="${esc(g.url)}">${esc(g.name)}</button>`).join('')
+        || `<span class="hint">Chưa có ${k.unit} nào — thêm ở mục <a href="#" data-goto="${k.view}">${k.label}</a> hoặc dán link bên dưới</span>`}</div>
+      <textarea class="input" data-field="${k.urls}" style="min-height:70px;margin-top:8px" placeholder="${k.placeholder}">${esc(f[k.urls])}</textarea>` : ''}`;
 }
 
 function estimate() {
@@ -213,12 +241,8 @@ function renderForm() {
   const where = f.kind === 'post' ? `
     <label class="lbl">Nơi đăng</label>
     ${sw('toProfile', 'Trang cá nhân', f.toProfile, '(tường của tài khoản)')}
-    ${sw('toGroups', 'Nhóm', f.toGroups, `(${f.groupIds.size + lines(f.groupUrls).length} nhóm)`)}
-    ${f.toGroups ? `
-      <div class="row" style="margin:6px 0"><span class="muted grow">Nhóm đã lưu</span>
-        <button type="button" class="btn sm" id="grpAll">${f.groupIds.size === S.targets.length && S.targets.length ? 'Bỏ chọn' : 'Chọn tất cả'}</button></div>
-      <div class="chips">${S.targets.map(g => `<button type="button" class="chip ${f.groupIds.has(g.id) ? 'on' : ''}" data-grp="${g.id}" title="${esc(g.url)}">${esc(g.name)}</button>`).join('') || '<span class="hint">Chưa có nhóm nào — thêm ở mục Nhóm hoặc dán link bên dưới</span>'}</div>
-      <textarea class="input" data-field="groupUrls" style="min-height:70px;margin-top:8px" placeholder="Link nhóm khác, mỗi dòng 1 link">${esc(f.groupUrls)}</textarea>` : ''}
+    ${targetPicker('group')}
+    ${targetPicker('page')}
   ` : `
     <label class="lbl">Link bài viết cần bình luận <small>(mỗi dòng 1 link)</small></label>
     <textarea class="input" data-field="postUrls" style="min-height:90px" placeholder="https://www.facebook.com/groups/.../posts/...">${esc(f.postUrls)}</textarea>
@@ -304,7 +328,10 @@ function bindForm() {
     if (!b) return;
     const f = S.form;
     if (b.dataset.seg) { f[b.dataset.seg] = b.dataset.val; if (b.dataset.seg === 'when' && f.when === 'at' && !f.at) f.at = toLocalInput(Date.now() + 3600000); }
-    else if (b.dataset.grp) { const id = +b.dataset.grp; f.groupIds.has(id) ? f.groupIds.delete(id) : f.groupIds.add(id); }
+    else if (b.dataset.grp || b.dataset.pg) {
+      const set = b.dataset.grp ? f.groupIds : f.pageIds, id = +(b.dataset.grp || b.dataset.pg);
+      set.has(id) ? set.delete(id) : set.add(id);
+    }
     else if (b.dataset.acc) { const id = +b.dataset.acc; f.accountIds.has(id) ? f.accountIds.delete(id) : f.accountIds.add(id); }
     else if (b.dataset.ctpl) { const id = +b.dataset.ctpl; f.contentTplIds.has(id) ? f.contentTplIds.delete(id) : f.contentTplIds.add(id); }
     else if (b.id === 'ctplAll') {
@@ -314,7 +341,10 @@ function bindForm() {
     else if (b.dataset.imgtpl) { const id = +b.dataset.imgtpl; f.imgTpls.has(id) ? f.imgTpls.delete(id) : f.imgTpls.add(id); }
     else if (b.dataset.rmimg) f.images.splice(+b.dataset.rmimg, 1);
     else if (b.id === 'imgClear') f.images = [];
-    else if (b.id === 'grpAll') f.groupIds = f.groupIds.size === S.targets.length ? new Set() : new Set(S.targets.map(g => g.id));
+    else if (b.id === 'grpAll' || b.id === 'pgAll') {
+      const k = TARGET_KIND[b.id === 'grpAll' ? 'group' : 'page'], ids = targetsOf(b.id === 'grpAll' ? 'group' : 'page').map(g => g.id);
+      f[k.ids] = f[k.ids].size === ids.length ? new Set() : new Set(ids);
+    }
     else if (b.id === 'accAll') f.accountIds = new Set(S.accounts.filter(a => a.status === 'ok').map(a => a.id));
     else if (b.id === 'tplSave') {
       if (!f.text.trim()) throw new Error('Chưa có nội dung để lưu');
@@ -341,6 +371,7 @@ async function submitForm(draft) {
     startAt, intervalMin: f.interval, repeat: f.repeat, draft,
   });
   toast(`Đã tạo ${r.created} task${draft ? ' (chưa chạy)' : ''}`);
+  if (!draft && runnerOff()) toast(RUNNER_OFF, 'error');
   f.text = ''; f.images = [];
   renderForm();
   S.listSig = '';
@@ -392,7 +423,7 @@ async function renderDetail(force) {
   if (!S.active) { el.innerHTML = '<div class="empty">Chọn một task để xem chi tiết</div>'; return; }
   let t;
   try { t = await api(`/api/tasks/${S.active}`); } catch { S.active = null; return renderDetail(); }
-  const sig = `${t.id}|${t.status}|${t.attempts}|${t.logs.length}|${t.scheduled_at}|${t.content}`;
+  const sig = `${t.id}|${t.status}|${t.attempts}|${t.logs.length}|${t.scheduled_at}|${t.content}|${runnerOff()}`;
   if (!force && sig === S.activeSig) return;
   S.activeSig = sig;
   const imgs = JSON.parse(t.images || '[]');
@@ -409,6 +440,7 @@ async function renderDetail(force) {
     <div class="muted">Tài khoản: ${esc(t.account_name || '—')}</div>
     <div class="muted">Lịch: ${fmt(t.scheduled_at)} ${REPEAT[t.repeat] ? '· ' + REPEAT[t.repeat] : ''}</div>
     ${t.finished_at ? `<div class="muted">Hoàn tất: ${fmt(t.finished_at)}</div>` : ''}
+    ${t.status === 'pending' && runnerOff() ? `<div class="err" style="margin-top:8px">${RUNNER_OFF} Hoặc bấm "Chạy ngay" để chạy riêng task này.</div>` : ''}
     <h3>Nội dung</h3>
     ${ctpls.length
       ? `<div>Ngẫu nhiên từ ${ctpls.length} mẫu, ưu tiên mẫu chưa dùng:</div><div class="chips" style="margin-top:6px">${ctpls.map(c => {
@@ -427,7 +459,8 @@ async function renderDetail(force) {
     ${t.error ? `<h3>Lỗi</h3><div class="err">${esc(t.error)}</div>` : ''}
     ${t.shot ? `<h3>Ảnh chụp màn hình lúc lỗi</h3><a href="/shots/${t.shot}" target="_blank"><img class="shot" src="/shots/${t.shot}"></a>` : ''}
     <div class="row" style="flex-wrap:wrap;margin-top:14px">
-      ${t.status !== 'running' ? `<button class="btn sm" data-dact="run_now">Chạy ngay</button>` : ''}
+      ${t.status === 'done' ? `<button class="btn sm" data-dact="rerun">Chạy lại</button>`
+        : t.status !== 'running' ? `<button class="btn sm" data-dact="run_now">Chạy ngay</button>` : ''}
       ${['pending', 'draft'].includes(t.status) ? `<button class="btn sm" data-dact="pause">Dừng</button>` : ''}
       ${t.status !== 'running' ? `<button class="btn sm" data-dact="edit">Sửa</button><button class="btn sm danger-text" data-dact="delete">Xoá</button>` : ''}
     </div>
@@ -439,6 +472,7 @@ async function renderDetail(force) {
     if (!act) return;
     if (act === 'edit') return editTask(t);
     if (act === 'delete' && !await confirmBox('Xoá task này?', 'Xoá')) return;
+    if (act === 'rerun' && !await confirmBox(RERUN_ASK(1), 'Chạy lại')) return;
     await api('/api/tasks/action', 'POST', { ids: [t.id], action: act });
     if (act === 'delete') S.active = null;
     S.listSig = '';
@@ -508,6 +542,7 @@ views.studio = {
             <button class="btn sm" data-bulk="pause">Dừng</button>
             <button class="btn sm danger-text" data-bulk="delete">Xoá</button>
             <button class="btn sm" data-bulk="retry">Chạy lại lỗi</button>
+            <button class="btn sm" data-bulk="rerun" title="Chạy lại các task đã xong trong số task đã chọn">Chạy lại đã xong</button>
           </div>
         </div>
         <div class="panel detail-panel detail" id="detail"></div>
@@ -555,8 +590,14 @@ views.studio = {
       if (action === 'retry' && !ids.length) ids = S.tasks.filter(t => t.status === 'error').map(t => t.id);
       if (!ids.length) throw new Error('Chưa chọn task');
       if (action === 'delete' && !await confirmBox(`Xoá ${ids.length} task đã chọn?`, 'Xoá')) return;
+      if (action === 'rerun') {
+        ids = ids.filter(id => S.tasks.find(t => t.id === id)?.status === 'done');
+        if (!ids.length) throw new Error('Trong các task đã chọn không có task nào đã xong');
+        if (!await confirmBox(RERUN_ASK(ids.length), 'Chạy lại')) return;
+      }
       const r = await api('/api/tasks/action', 'POST', { ids, action });
       toast(`Đã cập nhật ${r.changed} task`);
+      if (['run', 'retry'].includes(action) && runnerOff()) toast(RUNNER_OFF, 'error');
       if (action === 'delete') S.selected.clear();
       S.listSig = '';
       refreshTasks();
@@ -683,76 +724,94 @@ views.accounts = {
   },
 };
 
-// ================= Nhóm =================
-views.groups = {
-  title: 'Nhóm Facebook',
-  q: '',
-  async render() {
-    S.targets = await api('/api/targets');
-    const q = this.q.toLowerCase();
-    const list = S.targets.filter(g => !q || g.name.toLowerCase().includes(q) || g.url.toLowerCase().includes(q));
-    $('#view').innerHTML = `
-      <div class="panel">
-        <div class="toolbar">
-          <input class="input grow" id="gq" placeholder="Tìm nhóm…" value="${esc(this.q)}" style="max-width:320px">
-          <span class="grow"></span>
-          <button class="btn" id="bulkGrp">Nhập nhiều</button>
-          <button class="btn gold" id="addGrp">+ Thêm nhóm</button>
-        </div>
-        <div style="overflow-x:auto"><table class="table">
-          <thead><tr><th>Tên nhóm</th><th>Link</th><th>Ghi chú</th><th></th></tr></thead>
-          <tbody>${list.map(g => `<tr data-id="${g.id}">
-            <td><b>${esc(g.name)}</b></td>
-            <td><a href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.url)}</a></td>
-            <td class="muted">${esc(g.note)}</td>
-            <td><div class="row">
-              <button class="btn sm gold" data-act="post">Đăng vào nhóm</button>
-              <button class="btn sm" data-act="edit">Sửa</button>
-              <button class="btn sm danger-text" data-act="delete">Xoá</button>
-            </div></td></tr>`).join('') || '<tr><td colspan="4" class="empty">Chưa có nhóm</td></tr>'}</tbody>
-        </table></div>
-        <p class="hint">Tài khoản phải là thành viên của nhóm thì mới đăng được. Nhóm có kiểm duyệt sẽ ở trạng thái "chờ duyệt" sau khi đăng.</p>
-      </div>`;
-    $('#gq').oninput = e => { this.q = e.target.value; clearTimeout(this.t); this.t = setTimeout(() => { this.render().then(() => { const i = $('#gq'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }); }, 250); };
-    $('#addGrp').onclick = guard(async () => {
-      const r = await modal('Thêm nhóm', `<label class="lbl">Link nhóm hoặc ID</label><input class="input" name="url" required placeholder="https://www.facebook.com/groups/...">
-        <label class="lbl">Tên nhóm</label><input class="input" name="name"><label class="lbl">Ghi chú</label><input class="input" name="note">`);
-      if (!r) return;
-      const res = await api('/api/targets', 'POST', r);
-      toast(res.added ? 'Đã thêm nhóm' : 'Link không hợp lệ hoặc đã tồn tại', res.added ? 'ok' : 'error');
-      this.render();
-    });
-    $('#bulkGrp').onclick = guard(async () => {
-      const r = await modal('Nhập nhiều nhóm', `<p class="muted">Mỗi dòng: <code>link | tên nhóm</code> (tên có thể bỏ trống)</p><textarea class="input" name="bulk" required></textarea>`, 'Nhập');
-      if (!r) return;
-      const res = await api('/api/targets', 'POST', r);
-      toast(`Đã thêm ${res.added} nhóm`);
-      this.render();
-    });
-    $('#view').querySelector('tbody').onclick = guard(async e => {
-      const act = e.target.closest('[data-act]')?.dataset.act;
-      if (!act) return;
-      const g = S.targets.find(x => x.id === +e.target.closest('tr').dataset.id);
-      if (act === 'post') {
-        Object.assign(S.form, { kind: 'post', toGroups: true, toProfile: false, groupIds: new Set([g.id]), contentMode: 'all' });
-        return go('studio');
-      }
-      if (act === 'edit') {
-        const r = await modal('Sửa nhóm', `<label class="lbl">Tên</label><input class="input" name="name" value="${esc(g.name)}" required>
-          <label class="lbl">Link</label><input class="input" name="url" value="${esc(g.url)}" required>
-          <label class="lbl">Ghi chú</label><input class="input" name="note" value="${esc(g.note)}">`);
-        if (!r) return;
-        await api(`/api/targets/${g.id}`, 'PUT', r);
-      }
-      if (act === 'delete') {
-        if (!await confirmBox(`Xoá nhóm "${esc(g.name)}" khỏi danh sách?`, 'Xoá')) return;
-        await api(`/api/targets/${g.id}`, 'DELETE');
-        S.form.groupIds.delete(g.id);
-      }
-      this.render();
-    });
+// ================= Nhóm & Trang =================
+const TARGET_VIEW = {
+  group: {
+    title: 'Nhóm Facebook', one: 'nhóm', Name: 'Tên nhóm', postBtn: 'Đăng vào nhóm', urlLabel: 'Link nhóm hoặc ID',
+    placeholder: 'https://www.facebook.com/groups/...',
+    hint: 'Tài khoản phải là thành viên của nhóm thì mới đăng được. Nhóm có kiểm duyệt sẽ ở trạng thái "chờ duyệt" sau khi đăng.',
+  },
+  page: {
+    title: 'Trang Facebook (Fanpage)', one: 'Trang', Name: 'Tên Trang', postBtn: 'Đăng lên Trang', urlLabel: 'Link Trang hoặc ID',
+    placeholder: 'https://www.facebook.com/tentrang hoặc https://www.facebook.com/profile.php?id=...',
+    hint: 'Bài được đăng với tư cách Trang: tài khoản chạy task phải là quản trị viên (hoặc có quyền tạo bài viết) của Trang. Hệ thống tự bấm "Chuyển sang Trang" trước khi đăng và chuyển lại trang cá nhân sau khi đăng xong.',
   },
 };
+
+function targetView(type) {
+  const L = TARGET_VIEW[type], k = TARGET_KIND[type];
+  return {
+    title: L.title,
+    q: '',
+    async render() {
+      S.targets = await api('/api/targets');
+      const q = this.q.toLowerCase();
+      const list = targetsOf(type).filter(g => !q || g.name.toLowerCase().includes(q) || g.url.toLowerCase().includes(q));
+      $('#view').innerHTML = `
+        <div class="panel">
+          <div class="toolbar">
+            <input class="input grow" id="gq" placeholder="Tìm ${L.one}…" value="${esc(this.q)}" style="max-width:320px">
+            <span class="grow"></span>
+            <button class="btn" id="bulkGrp">Nhập nhiều</button>
+            <button class="btn gold" id="addGrp">+ Thêm ${L.one}</button>
+          </div>
+          <div style="overflow-x:auto"><table class="table">
+            <thead><tr><th>${L.Name}</th><th>Link</th><th>Ghi chú</th><th></th></tr></thead>
+            <tbody>${list.map(g => `<tr data-id="${g.id}">
+              <td><b>${esc(g.name)}</b></td>
+              <td><a href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.url)}</a></td>
+              <td class="muted">${esc(g.note)}</td>
+              <td><div class="row">
+                <button class="btn sm gold" data-act="post">${L.postBtn}</button>
+                <button class="btn sm" data-act="edit">Sửa</button>
+                <button class="btn sm danger-text" data-act="delete">Xoá</button>
+              </div></td></tr>`).join('') || `<tr><td colspan="4" class="empty">Chưa có ${L.one}</td></tr>`}</tbody>
+          </table></div>
+          <p class="hint">${L.hint}</p>
+        </div>`;
+      $('#gq').oninput = e => { this.q = e.target.value; clearTimeout(this.t); this.t = setTimeout(() => { this.render().then(() => { const i = $('#gq'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }); }, 250); };
+      $('#addGrp').onclick = guard(async () => {
+        const r = await modal(`Thêm ${L.one}`, `<label class="lbl">${L.urlLabel}</label><input class="input" name="url" required placeholder="${esc(L.placeholder)}">
+          <label class="lbl">${L.Name}</label><input class="input" name="name"><label class="lbl">Ghi chú</label><input class="input" name="note">`);
+        if (!r) return;
+        const res = await api('/api/targets', 'POST', { ...r, type });
+        toast(res.added ? `Đã thêm ${L.one}` : 'Link không hợp lệ hoặc đã tồn tại', res.added ? 'ok' : 'error');
+        this.render();
+      });
+      $('#bulkGrp').onclick = guard(async () => {
+        const r = await modal(`Nhập nhiều ${L.one}`, `<p class="muted">Mỗi dòng: <code>link | ${L.Name.toLowerCase()}</code> (tên có thể bỏ trống)</p><textarea class="input" name="bulk" required></textarea>`, 'Nhập');
+        if (!r) return;
+        const res = await api('/api/targets', 'POST', { ...r, type });
+        toast(`Đã thêm ${res.added} ${L.one}`);
+        this.render();
+      });
+      $('#view').querySelector('tbody').onclick = guard(async e => {
+        const act = e.target.closest('[data-act]')?.dataset.act;
+        if (!act) return;
+        const g = S.targets.find(x => x.id === +e.target.closest('tr').dataset.id);
+        if (act === 'post') {
+          Object.assign(S.form, { kind: 'post', toProfile: false, toGroups: false, toPages: false, contentMode: 'all', [k.sw]: true, [k.ids]: new Set([g.id]) });
+          return go('studio');
+        }
+        if (act === 'edit') {
+          const r = await modal(`Sửa ${L.one}`, `<label class="lbl">Tên</label><input class="input" name="name" value="${esc(g.name)}" required>
+            <label class="lbl">Link</label><input class="input" name="url" value="${esc(g.url)}" required>
+            <label class="lbl">Ghi chú</label><input class="input" name="note" value="${esc(g.note)}">`);
+          if (!r) return;
+          await api(`/api/targets/${g.id}`, 'PUT', r);
+        }
+        if (act === 'delete') {
+          if (!await confirmBox(`Xoá ${L.one} "${esc(g.name)}" khỏi danh sách?`, 'Xoá')) return;
+          await api(`/api/targets/${g.id}`, 'DELETE');
+          S.form[k.ids].delete(g.id);
+        }
+        this.render();
+      });
+    },
+  };
+}
+views.groups = targetView('group');
+views.pages = targetView('page');
 
 // ================= Mẫu nội dung =================
 views.templates = {

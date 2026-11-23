@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 CREATE TABLE IF NOT EXISTS targets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
-  type TEXT NOT NULL DEFAULT 'group',      -- group
+  type TEXT NOT NULL DEFAULT 'group',      -- group | page (Trang / Fanpage)
   url TEXT NOT NULL UNIQUE,
   note TEXT DEFAULT '',
   created_at INTEGER NOT NULL
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   batch TEXT,
   kind TEXT NOT NULL,                      -- post | comment
   account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-  target_type TEXT NOT NULL,               -- profile | group | post
+  target_type TEXT NOT NULL,               -- profile | group | page | post
   target_url TEXT,
   target_name TEXT,
   content TEXT NOT NULL,

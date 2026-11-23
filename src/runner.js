@@ -7,6 +7,9 @@ import { pickUnused } from './contents.js';
 
 const running = new Set(); // account ids đang chạy task
 const reservedContent = new Set(); // id mẫu nội dung đang được task chạy dở sử dụng
+// Task người dùng bấm "Chạy ngay": chạy cả khi bộ chạy đang dừng và bỏ qua khoảng nghỉ tối thiểu
+// (vẫn giữ giới hạn/ngày, số tài khoản song song, tài khoản bận)
+const forced = new Set();
 const DAY = 86400000;
 
 // Spintax: {Xin chào|Chào bạn|Hi} → chọn ngẫu nhiên một phương án
@@ -35,9 +38,19 @@ export function status() {
   };
 }
 
+export function runNow(ids) {
+  for (const id of ids) forced.add(Number(id));
+  return tick();
+}
+
 export async function tick() {
   const s = getSettings();
-  if (s.runner_enabled !== '1') return;
+  const enabled = s.runner_enabled === '1';
+  if (forced.size) {
+    const isPending = db.prepare("SELECT 1 FROM tasks WHERE id = ? AND status = 'pending'");
+    for (const id of forced) if (!isPending.get(id)) forced.delete(id); // đã xoá / tạm dừng / đã chạy
+  }
+  if (!enabled && !forced.size) return;
   const maxConcurrent = Math.max(1, +s.max_concurrent || 1);
   if (running.size >= maxConcurrent) return;
 
@@ -52,12 +65,15 @@ export async function tick() {
 
   for (const t of due) {
     if (running.size >= maxConcurrent) break;
+    const force = forced.has(t.id);
+    if (!enabled && !force) continue;
     if (!t.account_id) { fail.run('Task chưa gán tài khoản', now(), t.id); continue; }
     if (running.has(t.account_id) || fb.isBusy(t.account_id)) continue;
     if (t.acc_status !== 'ok') { fail.run('Tài khoản chưa đăng nhập / hết phiên', now(), t.id); continue; }
-    if (t.last_action_at && now() - t.last_action_at < (+s.min_gap_seconds || 0) * 1000) continue;
+    if (!force && t.last_action_at && now() - t.last_action_at < (+s.min_gap_seconds || 0) * 1000) continue;
     if (countToday.get(t.account_id, startOfDay()).n >= (+s.daily_limit || Infinity)) continue;
 
+    forced.delete(t.id);
     running.add(t.account_id);
     runTask(t, s).finally(() => running.delete(t.account_id));
   }
